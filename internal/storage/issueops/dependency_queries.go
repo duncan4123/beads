@@ -28,11 +28,10 @@ func GetAllDependencyRecordsInTx(ctx context.Context, tx DBTX) (map[string][]*ty
 
 //nolint:gosec // G201: depTable is "dependencies" or "wisp_dependencies" (hardcoded by caller).
 func getAllDependencyRecordsIntoFromTable(ctx context.Context, tx DBTX, depTable string, result map[string][]*types.Dependency) error {
-	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
-			SELECT issue_id, %s AS depends_on_id, type, created_at, created_by, metadata, thread_id
-			FROM %s
-			ORDER BY issue_id
-		`, DepTargetExpr, depTable))
+	rows, err := queryAllDependencyRecordsFromTable(ctx, tx, depTable, DepTargetExpr)
+	if err != nil && isColumnNotExistError(err) {
+		rows, err = queryAllDependencyRecordsFromTable(ctx, tx, depTable, legacyDepTargetExpr())
+	}
 	if err != nil {
 		return fmt.Errorf("get all dependency records from %s: %w", depTable, err)
 	}
@@ -108,10 +107,11 @@ func getDependencyRecordsIntoFromTable(ctx context.Context, tx DBTX, depTable st
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-			`SELECT issue_id, %s AS depends_on_id, type, created_at, created_by, metadata, thread_id
-			 FROM %s WHERE issue_id IN (%s) ORDER BY issue_id`,
-			DepTargetExpr, depTable, strings.Join(placeholders, ",")), args...)
+		inClause := strings.Join(placeholders, ",")
+		rows, err := queryDependencyRecordsFromTable(ctx, tx, depTable, DepTargetExpr, inClause, args...)
+		if err != nil && isColumnNotExistError(err) {
+			rows, err = queryDependencyRecordsFromTable(ctx, tx, depTable, legacyDepTargetExpr(), inClause, args...)
+		}
 		if err != nil {
 			return fmt.Errorf("get dependency records from %s: %w", depTable, err)
 		}
@@ -129,6 +129,23 @@ func getDependencyRecordsIntoFromTable(ctx context.Context, tx DBTX, depTable st
 		}
 	}
 	return nil
+}
+
+//nolint:gosec // G201: depTable and targetExpr are fixed by callers.
+func queryAllDependencyRecordsFromTable(ctx context.Context, tx DBTX, depTable, targetExpr string) (*sql.Rows, error) {
+	return tx.QueryContext(ctx, fmt.Sprintf(`
+			SELECT issue_id, %s AS depends_on_id, type, created_at, created_by, metadata, thread_id
+			FROM %s
+			ORDER BY issue_id
+		`, targetExpr, depTable))
+}
+
+//nolint:gosec // G201: depTable and targetExpr are fixed by callers; inClause only has ? placeholders.
+func queryDependencyRecordsFromTable(ctx context.Context, tx DBTX, depTable, targetExpr, inClause string, args ...any) (*sql.Rows, error) {
+	return tx.QueryContext(ctx, fmt.Sprintf(
+		`SELECT issue_id, %s AS depends_on_id, type, created_at, created_by, metadata, thread_id
+		 FROM %s WHERE issue_id IN (%s) ORDER BY issue_id`,
+		targetExpr, depTable, inClause), args...)
 }
 
 func GetDependencyCountsInTx(ctx context.Context, tx DBTX, issueIDs []string) (map[string]*types.DependencyCounts, error) {

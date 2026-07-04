@@ -97,6 +97,7 @@ func SearchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, f
 }
 
 func runFilterSearchQueryInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables, includeWispReverseDeps bool) ([]*types.IssueWithCounts, error) {
+	dialect := sqlbuild.CountsDialectDolt
 	whereClauses, args, err := BuildIssueFilterClauses(query, filter, tables)
 	if err != nil {
 		return nil, err
@@ -109,7 +110,7 @@ func runFilterSearchQueryInTx(ctx context.Context, tx *sql.Tx, query string, fil
 	if filter.Limit > 0 {
 		limitSQL = fmt.Sprintf("LIMIT %d", filter.Limit)
 	}
-	orderBy := sqlbuild.OrderBy(filter.SortBy, filter.SortDesc, "i")
+	orderBy := sqlbuild.OrderByDialect(filter.SortBy, filter.SortDesc, "i", dialect)
 	return runSearchQueryInTx(ctx, tx, tables, whereSQL, orderBy, limitSQL, args, includeWispReverseDeps, filter.SkipLabels)
 }
 

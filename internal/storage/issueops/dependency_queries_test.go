@@ -83,6 +83,32 @@ func TestGetAllDependencyRecordsInTxToleratesMissingWispDependencyTable(t *testi
 	}
 }
 
+func TestGetAllDependencyRecordsInTxFallsBackToLegacyDependsOnID(t *testing.T) {
+	t.Parallel()
+
+	_, mock, tx := beginMockTx(t)
+	now := time.Now()
+	mock.ExpectQuery(allDependencyRecordsQueryRegex("dependencies")).
+		WillReturnRows(dependencyRows())
+	mock.ExpectQuery(allDependencyRecordsQueryRegex("wisp_dependencies")).
+		WillReturnError(errors.New("no such column: depends_on_issue_id"))
+	mock.ExpectQuery(`(?s)SELECT issue_id, depends_on_id AS depends_on_id, type, created_at, created_by, metadata, thread_id\s+FROM wisp_dependencies\s+ORDER BY issue_id`).
+		WillReturnRows(dependencyRows().AddRow(
+			"wisp-source", "legacy-target", types.DepBlocks, now, "tester", "{}", "thread-wisp",
+		))
+
+	got, err := GetAllDependencyRecordsInTx(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("GetAllDependencyRecordsInTx: %v", err)
+	}
+	if dep := onlyDependency(t, got, "wisp-source"); dep.DependsOnID != "legacy-target" {
+		t.Fatalf("legacy dependency target = %q, want legacy-target", dep.DependsOnID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
 func onlyDependency(t *testing.T, deps map[string][]*types.Dependency, issueID string) *types.Dependency {
 	t.Helper()
 

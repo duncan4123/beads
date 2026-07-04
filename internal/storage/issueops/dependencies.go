@@ -44,6 +44,21 @@ func depTargetExpr(alias string) string {
 	return fmt.Sprintf("COALESCE(%s.depends_on_issue_id, %s.depends_on_wisp_id, %s.depends_on_external)", alias, alias, alias)
 }
 
+func legacyDepTargetExpr() string {
+	return "depends_on_id"
+}
+
+func isColumnNotExistError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "unknown column") ||
+		strings.Contains(s, "no such column") ||
+		strings.Contains(s, "could not be found") ||
+		strings.Contains(s, "error 1054")
+}
+
 func depTargetEquals(alias string) string {
 	return depTargetExpr(alias) + " = ?"
 }
@@ -858,8 +873,10 @@ func GetDependenciesWithMetadataInTx(ctx context.Context, tx DBTX, issueID strin
 	// Query both dependency tables to find all dependencies.
 	var deps []depMeta
 	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
-		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-			`SELECT %s AS depends_on_id, type FROM %s WHERE issue_id = ?`, DepTargetExpr, depTable), issueID)
+		rows, err := queryDependencyTargetsWithMetadata(ctx, tx, depTable, DepTargetExpr, issueID)
+		if err != nil && isColumnNotExistError(err) {
+			rows, err = queryDependencyTargetsWithMetadata(ctx, tx, depTable, legacyDepTargetExpr(), issueID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("get dependencies from %s: %w", depTable, err)
 		}
@@ -921,8 +938,10 @@ func GetDependentsWithMetadataInTx(ctx context.Context, tx DBTX, issueID string)
 	// Query both dependency tables to find all dependents.
 	var deps []depMeta
 	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
-		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-			`SELECT issue_id, type FROM %s WHERE %s = ?`, depTable, DepTargetExpr), issueID)
+		rows, err := queryDependentTargetsWithMetadata(ctx, tx, depTable, DepTargetExpr, issueID)
+		if err != nil && isColumnNotExistError(err) {
+			rows, err = queryDependentTargetsWithMetadata(ctx, tx, depTable, legacyDepTargetExpr(), issueID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("get dependents from %s: %w", depTable, err)
 		}
@@ -979,8 +998,10 @@ func GetDependentsWithMetadataInTx(ctx context.Context, tx DBTX, issueID string)
 func GetDependenciesInTx(ctx context.Context, tx *sql.Tx, issueID string) ([]*types.Issue, error) {
 	var ids []string
 	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
-		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-			`SELECT %s AS depends_on_id FROM %s WHERE issue_id = ?`, DepTargetExpr, depTable), issueID)
+		rows, err := queryDependencyTargets(ctx, tx, depTable, DepTargetExpr, issueID)
+		if err != nil && isColumnNotExistError(err) {
+			rows, err = queryDependencyTargets(ctx, tx, depTable, legacyDepTargetExpr(), issueID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("get dependencies from %s: %w", depTable, err)
 		}
@@ -1012,8 +1033,10 @@ func GetDependenciesInTx(ctx context.Context, tx *sql.Tx, issueID string) ([]*ty
 func GetDependentsInTx(ctx context.Context, tx *sql.Tx, issueID string) ([]*types.Issue, error) {
 	var ids []string
 	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
-		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-			`SELECT issue_id FROM %s WHERE %s = ?`, depTable, DepTargetExpr), issueID)
+		rows, err := queryDependentTargets(ctx, tx, depTable, DepTargetExpr, issueID)
+		if err != nil && isColumnNotExistError(err) {
+			rows, err = queryDependentTargets(ctx, tx, depTable, legacyDepTargetExpr(), issueID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("get dependents from %s: %w", depTable, err)
 		}
@@ -1036,4 +1059,28 @@ func GetDependentsInTx(ctx context.Context, tx *sql.Tx, issueID string) ([]*type
 	}
 
 	return GetIssuesByIDsInTx(ctx, tx, ids, nil)
+}
+
+//nolint:gosec // G201: depTable and targetExpr are fixed by callers.
+func queryDependencyTargetsWithMetadata(ctx context.Context, tx DBTX, depTable, targetExpr, issueID string) (*sql.Rows, error) {
+	return tx.QueryContext(ctx, fmt.Sprintf(
+		`SELECT %s AS depends_on_id, type FROM %s WHERE issue_id = ?`, targetExpr, depTable), issueID)
+}
+
+//nolint:gosec // G201: depTable and targetExpr are fixed by callers.
+func queryDependentTargetsWithMetadata(ctx context.Context, tx DBTX, depTable, targetExpr, issueID string) (*sql.Rows, error) {
+	return tx.QueryContext(ctx, fmt.Sprintf(
+		`SELECT issue_id, type FROM %s WHERE %s = ?`, depTable, targetExpr), issueID)
+}
+
+//nolint:gosec // G201: depTable and targetExpr are fixed by callers.
+func queryDependencyTargets(ctx context.Context, tx DBTX, depTable, targetExpr, issueID string) (*sql.Rows, error) {
+	return tx.QueryContext(ctx, fmt.Sprintf(
+		`SELECT %s AS depends_on_id FROM %s WHERE issue_id = ?`, targetExpr, depTable), issueID)
+}
+
+//nolint:gosec // G201: depTable and targetExpr are fixed by callers.
+func queryDependentTargets(ctx context.Context, tx DBTX, depTable, targetExpr, issueID string) (*sql.Rows, error) {
+	return tx.QueryContext(ctx, fmt.Sprintf(
+		`SELECT issue_id FROM %s WHERE %s = ?`, depTable, targetExpr), issueID)
 }

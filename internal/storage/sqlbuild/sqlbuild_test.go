@@ -33,6 +33,39 @@ func TestOrderByKnownKeys(t *testing.T) {
 	}
 }
 
+func TestOrderByDialectNormalizesSQLiteCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	got := OrderByDialect("created", false, "i", CountsDialectSQLite)
+	want := "ORDER BY replace(substr(i.created_at, 1, 19), 'T', ' ') DESC, i.id ASC"
+	if got != want {
+		t.Fatalf("OrderByDialect SQLite created = %q, want %q", got, want)
+	}
+}
+
+func TestOrderByDialectKeepsDoltCreatedAtRaw(t *testing.T) {
+	t.Parallel()
+
+	got := OrderByDialect("created", false, "i", CountsDialectDolt)
+	if strings.Contains(got, "replace(substr(") {
+		t.Fatalf("Dolt order should not use SQLite timestamp normalization: %q", got)
+	}
+	want := "ORDER BY i.created_at DESC, i.id ASC"
+	if got != want {
+		t.Fatalf("OrderByDialect Dolt created = %q, want %q", got, want)
+	}
+}
+
+func TestOrderByDialectNormalizesPriorityCreatedTieBreaker(t *testing.T) {
+	t.Parallel()
+
+	got := OrderByDialect("priority", false, "i", CountsDialectSQLite)
+	want := "ORDER BY i.priority ASC, replace(substr(i.created_at, 1, 19), 'T', ' ') DESC, i.id ASC"
+	if got != want {
+		t.Fatalf("OrderByDialect SQLite priority = %q, want %q", got, want)
+	}
+}
+
 // TestUnionSortColumnsCoverSortDefs pins that every SQL-side sort key has a
 // sort_* alias in UnionSortColumnsSQL, so UNION consumers can order by any
 // key OrderByForColumns may emit.

@@ -772,6 +772,43 @@ func TestDeleteIssuesCascadeDeletesNoHistoryWispDependent(t *testing.T) {
 	}
 }
 
+func TestDeleteIssuesMixedIssueWispSetWithDependenciesAndLabels(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx, cancel := testContext(t)
+	defer cancel()
+
+	createPerm(t, ctx, store, "mixed-delete-set-issue")
+	createWisp(t, ctx, store, "mixed-delete-set-wisp")
+	if err := store.AddDependency(ctx, &types.Dependency{
+		IssueID:     "mixed-delete-set-wisp",
+		DependsOnID: "mixed-delete-set-issue",
+		Type:        types.DepBlocks,
+	}, "tester"); err != nil {
+		t.Fatalf("AddDependency mixed delete set: %v", err)
+	}
+	if err := store.AddLabel(ctx, "mixed-delete-set-issue", "issue-label", "tester"); err != nil {
+		t.Fatalf("AddLabel issue: %v", err)
+	}
+	if err := store.AddLabel(ctx, "mixed-delete-set-wisp", "wisp-label", "tester"); err != nil {
+		t.Fatalf("AddLabel wisp: %v", err)
+	}
+
+	result, err := store.DeleteIssues(ctx, []string{"mixed-delete-set-issue", "mixed-delete-set-wisp"}, false, true, false)
+	if err != nil {
+		t.Fatalf("DeleteIssues mixed issue/wisp set: %v", err)
+	}
+	if result.DeletedCount != 2 {
+		t.Fatalf("DeletedCount = %d, want issue plus wisp", result.DeletedCount)
+	}
+	for _, id := range []string{"mixed-delete-set-issue", "mixed-delete-set-wisp"} {
+		if _, err := store.GetIssue(ctx, id); !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("GetIssue(%s) after mixed delete err = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
 func TestDemoteToWispRecordsOnlyCreateAndDemotionEvents(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()

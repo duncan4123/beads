@@ -85,6 +85,7 @@ func SearchIssuesInTx(ctx context.Context, tx DBTX, query string, filter types.I
 // Pattern B is equivalent to Pattern A but faster on large corpora where most rows
 // are never needed (mirrors the pattern in scanIssueIDs and GetStaleIssuesInTx).
 func searchTableInTx(ctx context.Context, tx DBTX, query string, filter types.IssueFilter, tables FilterTables) ([]*types.Issue, error) {
+	dialect := sqlbuild.CountsDialectDolt
 	plan := sqlbuild.BuildLabelDrivenSearch(filter, tables)
 	whereClauses, args, err := BuildIssueFilterClauses(query, plan.Filter, tables)
 	if err != nil {
@@ -99,7 +100,7 @@ func searchTableInTx(ctx context.Context, tx DBTX, query string, filter types.Is
 
 	// Pattern B: when Limit > 0, use a cheap id scan then hydrate in batch.
 	if filter.Limit > 0 && !filter.NoIDShrink {
-		return searchTablePatternB(ctx, tx, plan.FromSQL, whereSQL, args, filter, tables, plan.Distinct)
+		return searchTablePatternB(ctx, tx, plan.FromSQL, whereSQL, args, filter, tables, plan.Distinct, dialect)
 	}
 
 	// Pattern A: full 47-column scan (used for unlimited queries or when NoIDShrink is set).
@@ -114,7 +115,7 @@ func searchTableInTx(ctx context.Context, tx DBTX, query string, filter types.Is
 	}
 	//nolint:gosec // G201: SQL fragments are built from fixed table/column names and parameterized filters.
 	querySQL := fmt.Sprintf(`%s%s FROM %s %s %s %s`,
-		selectSQL, IssueSelectColumns, plan.FromSQL, whereSQL, sqlbuild.OrderBy(filter.SortBy, filter.SortDesc, ""), limitSQL)
+		selectSQL, IssueSelectColumns, plan.FromSQL, whereSQL, sqlbuild.OrderByDialect(filter.SortBy, filter.SortDesc, "", dialect), limitSQL)
 
 	rows, err := tx.QueryContext(ctx, querySQL, args...)
 	if err != nil {
@@ -150,7 +151,7 @@ func searchTableInTx(ctx context.Context, tx DBTX, query string, filter types.Is
 // searchTablePatternB runs Pattern B: SELECT id LIMIT n → batch hydrate.
 // Equivalent result to Pattern A but avoids streaming all 47 columns for rows
 // that won't survive the LIMIT cut. Mirrors the approach in GetStaleIssuesInTx.
-func searchTablePatternB(ctx context.Context, tx DBTX, fromSQL, whereSQL string, args []interface{}, filter types.IssueFilter, tables FilterTables, labelDriven bool) ([]*types.Issue, error) {
+func searchTablePatternB(ctx context.Context, tx DBTX, fromSQL, whereSQL string, args []interface{}, filter types.IssueFilter, tables FilterTables, labelDriven bool, dialect sqlbuild.CountsDialect) ([]*types.Issue, error) {
 	idSelect := "SELECT "
 	if labelDriven {
 		idSelect = "SELECT DISTINCT "
@@ -158,7 +159,7 @@ func searchTablePatternB(ctx context.Context, tx DBTX, fromSQL, whereSQL string,
 	//nolint:gosec // G201: SQL fragments from fixed column/table names and parameterized filters.
 	idQuery := fmt.Sprintf(`%s%s.id FROM %s %s %s LIMIT %d`,
 		idSelect, tables.Main, fromSQL, whereSQL,
-		sqlbuild.OrderBy(filter.SortBy, filter.SortDesc, tables.Main), filter.Limit)
+		sqlbuild.OrderByDialect(filter.SortBy, filter.SortDesc, tables.Main, dialect), filter.Limit)
 
 	rows, err := tx.QueryContext(ctx, idQuery, args...)
 	if err != nil {

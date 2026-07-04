@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -94,6 +95,32 @@ func TestGetDependencyTreeInTxSkipsRelatesToEdges(t *testing.T) {
 	}
 }
 
+func TestGetDependenciesWithMetadataInTxFallsBackToLegacyDependsOnID(t *testing.T) {
+	_, mock, tx := beginMockTx(t)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + DepTargetExpr + " AS depends_on_id, type FROM dependencies WHERE issue_id = ?")).
+		WithArgs("source").
+		WillReturnRows(sqlmock.NewRows([]string{"depends_on_id", "type"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + DepTargetExpr + " AS depends_on_id, type FROM wisp_dependencies WHERE issue_id = ?")).
+		WithArgs("source").
+		WillReturnError(errors.New("no such column: depends_on_issue_id"))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT depends_on_id AS depends_on_id, type FROM wisp_dependencies WHERE issue_id = ?")).
+		WithArgs("source").
+		WillReturnRows(sqlmock.NewRows([]string{"depends_on_id", "type"}).
+			AddRow("target", string(types.DepBlocks)))
+	expectSingleIssueBatch(mock, "target")
+
+	got, err := GetDependenciesWithMetadataInTx(context.Background(), tx, "source")
+	if err != nil {
+		t.Fatalf("GetDependenciesWithMetadataInTx: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "target" || got[0].DependencyType != types.DepBlocks {
+		t.Fatalf("dependencies = %+v, want target blocks", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 type dependencyRow struct {
 	id      string
 	depType string
@@ -134,6 +161,18 @@ func expectIssueBatch(mock sqlmock.Sqlmock, ids []string) {
 		WillReturnRows(rows)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT issue_id, label FROM labels WHERE issue_id IN (?,?) ORDER BY issue_id, label")).
 		WithArgs(ids[0], ids[1]).
+		WillReturnRows(sqlmock.NewRows([]string{"issue_id", "label"}))
+}
+
+func expectSingleIssueBatch(mock sqlmock.Sqlmock, id string) {
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM wisps LIMIT 1")).
+		WillReturnError(sql.ErrNoRows)
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + IssueSelectColumns + " FROM issues WHERE id IN (?)")).
+		WithArgs(id).
+		WillReturnRows(issueRows().AddRow(issueRowValues(id, id)...))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT issue_id, label FROM labels WHERE issue_id IN (?) ORDER BY issue_id, label")).
+		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"issue_id", "label"}))
 }
 
